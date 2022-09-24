@@ -1,0 +1,93 @@
+# open R packages
+library(raster)
+library(rgdal)
+library(dplyr)
+library(sp)
+library(landscapemetrics)
+library(sf)
+library(fasterize)
+library(parallel)
+
+lc1992 <- raster("Data/lc1992_waterna.tif")
+lc2020 <- raster("Data/lc2020_waterna.tif")
+biome_rast <- raster("Data/biome_rast30.tif")
+
+
+##
+
+#create random points across globe for land cover 1992 or 2020 raster
+x <- sampleRandom(lc2020, 400000, na.rm=TRUE, xy=TRUE) #e.g., 30% of terrestrial systems are forests, 29% of planet is land
+x <- as.data.frame(x)
+x <- x[!(x$lc2020_waterna==0),] #only keep forest points
+
+#write.csv(x, "data_forest2020.csv")
+
+# prova <- x[4,1:2]
+# prova_raster <- crop(lc2020,
+#                      extent((prova$x - 50000), (prova$x + 50000), (prova$y - 50000), (prova$y + 50000)))
+# 
+# frag
+# area
+
+
+#function to get patch size (50km in all directions from point, end up with a 100km x 100km area)
+FRAG_AREA <- function(number, list_points, raster_cover){
+  prova <- list_points[number,1:2]
+  prova_raster <- crop(raster_cover,
+                       extent((prova$x - 50000), (prova$x + 50000), (prova$y - 50000), (prova$y + 50000)))
+  area <- cellStats(prova_raster, "mean")
+  frag <- sample_lsm(prova_raster, y = as.matrix(prova), 
+                     shape = "square",
+                     size = 50000,
+                     level = "landscape",
+                     what = "lsm_l_np")
+  object <- data.frame(area = area, frag = frag$value)
+  
+  return(object)
+}
+
+
+# parallelize
+numCores <- detectCores(logical = TRUE) - 1
+numCores
+## [1] we have 7 cores
+cl <- makeCluster(numCores)
+
+start_time <- Sys.time()
+
+parallel::clusterEvalQ(cl, {
+  library(raster)
+  library(rgdal)
+  library(dplyr)
+  library(sp)
+  library(landscapemetrics)
+  
+})
+
+parallel::clusterExport(cl, varlist = c("x", "lc2020"))
+
+res_f <- parallel::parLapply(cl, # the list of parallel R running
+                            seq_len(nrow(x)),
+                            # replicate the function on the name of the species, from table_species; the parentheses limit this to 20 species
+                            FRAG_AREA, # the function to replicate
+                            list_points = x,
+                            raster_cover = lc2020)
+
+stopCluster(cl)
+
+end_time <- Sys.time()
+end_time - start_time
+
+# save as a csv
+results <- do.call(rbind, res_f)
+plot(results$area, results$frag)
+write.csv(results,"results_frag.csv")
+
+library(ggplot2)
+library(ggthemes)
+ggplot(results,aes(x=area,y=frag)) + 
+  stat_binhex()+
+  xlab("Area of forest in a landscape") +
+  ylab("Number of forest patches in a landscape")+
+  theme_few()
+
